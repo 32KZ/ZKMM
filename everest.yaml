@@ -1,0 +1,6 @@
+- Name: ZKModMenu
+  Version: 1.0.0
+  DLL: bin/ZKModMenu.dll
+  Dependencies:
+    - Name: EverestCore
+      Version: 1.5000.0

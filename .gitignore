@@ -1,0 +1,9 @@
+bin/
+obj/
+Harness/bin/
+Harness/obj/
+lib-stripped/
+*.zip
+.vs/
+.idea/
+*.user
