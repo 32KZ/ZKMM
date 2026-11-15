@@ -47,7 +47,7 @@ Celeste's mod loader, [Everest](https://everestapi.github.io/), puts the setting
 
 You need Celeste with **Everest** installed. Everest is installed with [Olympus](https://everestapi.github.io/), the Celeste mod manager. ZKMM needs one of the current .NET Core builds of Everest (build 5000 or newer); any up to date Everest is fine.
 
-1. Get `ZKModMenu.zip`, either from this repository's [Releases](../../releases) page or by [building it yourself](#building-from-source).
+1. Get `ZKModMenu.zip`. There are no published downloads yet, so for now [build it from source](#building-from-source); that section ends with how to make the zip.
 2. Find your Celeste folder. On Steam: right click Celeste, then **Manage → Browse local files**. Olympus also shows the folder of the install it manages.
 3. Copy `ZKModMenu.zip` into the `Mods` folder inside it. Do not unzip it; Everest loads mod zips directly.
 4. Start the game. Pause in any level and choose **ZK Mod Menu**.
@@ -110,11 +110,12 @@ Open them with the gear button next to the search box. The same options also app
 
 **Where things are saved.** ZKMM's own options and your favourites are stored by Everest in `Saves/modsettings-ZKModMenu.celeste`, like any other mod's settings.
 
-**Mods with their own screens.** Some mods have a button that opens a screen of their own. When you press one, ZKMM steps aside and comes back once that screen closes.
+**Mods with their own screens.** Some mods have a button that opens a screen of their own, often in Celeste's normal menu style. When you press one, ZKMM steps aside and is meant to come back once that screen closes. This does not work reliably yet; see [Known limitations](#known-limitations).
 
 ## Known limitations
 
 - **Not yet run in game.** See the status note at the top. The first in-game runs will very likely need small fixes.
+- **Backing out of a mod's own screen can softlock the game.** Some mods open a detailed menu of their own in Celeste's normal style. Leaving that menu with Back can leave the game stuck. This is being looked into; until it is fixed, avoid those buttons inside ZKMM and use Everest's Mod Options for them.
 - **Online lookup untested.** The author and description download is written from the database's documented format but has not been tested against the live server.
 - **Title screen only settings.** Settings a mod only offers from the title screen do not appear, exactly as in Everest's in-game Mod Options. Use Everest's Mod Options on the title screen for those.
 - **Pause menu only.** ZK Mod Menu is opened from the pause menu in a level. On the title screen, use Everest's Mod Options.
