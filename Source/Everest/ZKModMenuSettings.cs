@@ -27,6 +27,9 @@ namespace ZKModMenu {
 
         public bool HideModOptionsButton { get; set; } = false;
 
+        /// <summary>Show menus that a mod opens from its page as ZKMM pages, instead of in Celeste's own menu style.</summary>
+        public bool RestyleModScreens { get; set; } = true;
+
         /// <summary>The "other action" button: favourite a mod in the list, reset a setting on a mod page.</summary>
         [DefaultButtonBinding(Buttons.X, Keys.X)]
         public ButtonBinding OtherActionButton { get; set; }

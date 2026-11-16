@@ -118,8 +118,12 @@ namespace ZKModMenu.Harness {
         public string Author => A;
         public string Description => D;
         public int SettingCount => R.Count(r => r.Selectable);
-        public IReadOnlyList<ZkRow> Rows => R;
-        public bool Suspended => false;
+        // A screen the mod opened from its page, as the game side would hand it over.
+        public string SubTitle; public List<ZkRow> SubRows; public int Leaves; public bool Hidden;
+        public IReadOnlyList<ZkRow> Rows => SubTitle != null ? SubRows : R;
+        public bool Suspended => Hidden;
+        public string SubPage => SubTitle;
+        public void LeaveSubPage() { Leaves++; SubTitle = null; SubRows = null; }
         public void Open() { Opened = true; Opens++; }
         public void Close() { Opened = false; Closes++; }
         public int ResetAllToDefault() => ZkMenu.ResetRows(R);
@@ -134,6 +138,7 @@ namespace ZKModMenu.Harness {
         public bool DetectDefaults { get; set; } = true;
         public bool OnlineInfo { get; set; } = true;
         public bool HideModOptionsButton { get; set; }
+        public bool RestyleModScreens { get; set; } = true;
         public HashSet<string> Favs = new HashSet<string>();
         public bool IsFavourite(string id) => Favs.Contains(id);
         public void SetFavourite(string id, bool f) { if (f) Favs.Add(id); else Favs.Remove(id); }
@@ -197,6 +202,39 @@ namespace ZKModMenu.Harness {
         };
     }
 
+    // ---------------------------------------------------------------- a mod's own screens
+
+    /// <summary>A menu as the screen tracker sees it.</summary>
+    sealed class FakeMenu {
+        public string Name; public bool On = true, Focus = true, Plain = true;
+        public override string ToString() => Name;
+    }
+
+    /// <summary>A stand-in for the level: which menus are on screen, and what a mod just put there.</summary>
+    sealed class FakeWorld : IZkScreenWorld {
+        public readonly List<FakeMenu> Screen = new List<FakeMenu>();   // on screen
+        public readonly List<FakeMenu> Pending = new List<FakeMenu>();  // about to be
+        public readonly HashSet<FakeMenu> Known = new HashSet<FakeMenu>();
+        public readonly List<string> Log = new List<string>();
+        public bool PauseOpen, Fading;
+
+        public bool OnScreen(object menu) => Screen.Contains((FakeMenu) menu);
+        public bool HasFocus(object menu) => ((FakeMenu) menu).Focus;
+        public bool PauseMenuOpen => PauseOpen;
+        public bool Busy => Fading;
+        public void FindNewcomers(List<ZkNewcomer> into) {
+            foreach (FakeMenu m in Screen) if (!Known.Contains(m)) into.Add(new ZkNewcomer { Thing = m, IsMenu = m.Plain, Arrived = true });
+            foreach (FakeMenu m in Pending) if (!Known.Contains(m)) into.Add(new ZkNewcomer { Thing = m, IsMenu = m.Plain, Arrived = false });
+        }
+        public void Adopted(object menu) => Log.Add("adopt " + menu);
+        public void Dropped(object menu) => Log.Add("drop " + menu);
+
+        public void Put(FakeMenu m) { if (!Screen.Contains(m)) Screen.Add(m); }
+        public void Take(FakeMenu m) => Screen.Remove(m);
+        /// <summary>What the game side does while a page is in charge: note everything that is there.</summary>
+        public void Remember() { Known.Clear(); foreach (FakeMenu m in Screen) Known.Add(m); foreach (FakeMenu m in Pending) Known.Add(m); }
+    }
+
     // ---------------------------------------------------------------- scenarios
 
     static class Program {
@@ -228,6 +266,222 @@ namespace ZKModMenu.Harness {
             FakeHost h = new FakeHost { ModList = Data.Mods() };
             h.Opt.Favs.Add("PracticeTimer"); h.Opt.Favs.Add("HitboxViewer"); h.Opt.Favs.Add("SavestatesLite");
             return h;
+        }
+
+        // A mod's own screen shown as a page: its rows replace the mod's, and Back belongs to the mod.
+        static void SubPages() {
+            FakeRow inner = new FakeRow { K = ZkRowKind.Toggle, L = "Wall bounce everywhere", Value = 1, Def = 1, NoDefault = true };
+            FakeMod mod = new FakeMod { N = "Extended Dash Rules", A = "Kestrel Moss", V = "5.2.0", D = "Change how many dashes you get, how far they go and when they refill." };
+            int presses = 0;
+            FakeRow opener = new FakeRow { K = ZkRowKind.Button, L = "Movement variants" };
+            opener.OnPress = () => {
+                presses++;
+                mod.SubTitle = "Movement variants";
+                mod.SubRows = new List<ZkRow> {
+                    new ZkTextRow(ZkRowKind.Header, "Movement"),
+                    new FakeRow { K = ZkRowKind.Slider, L = "Gravity", Min = 0, Max = 200, Step = 10, Value = 100, Def = 100, Unit = "%", NoDefault = true },
+                    inner,
+                    new FakeRow { K = ZkRowKind.Choice, L = "Dash direction", Opts = new[] { "Any", "Cardinal only", "Diagonal only" }, NoDefault = true },
+                    new FakeRow { K = ZkRowKind.Button, L = "Reset movement variants" },
+                };
+            };
+            FakeRow master = new FakeRow { K = ZkRowKind.Toggle, L = "Enabled", Value = 1, Def = 1 };
+            mod.R.AddRange(new ZkRow[] { master, new FakeRow { K = ZkRowKind.Slider, L = "Dash count", Min = 0, Max = 5, Value = 1, Def = 1 }, opener,
+                new FakeRow { K = ZkRowKind.Button, L = "Visual variants" } });
+
+            FakeHost h = new FakeHost(); h.ModList.Add(mod);
+            ZkMenu m = new ZkMenu(h);
+            Do(m, ZkAction.Down, ZkAction.Confirm);
+            Check(mod.Opened, "the mod page opens");
+            Do(m, ZkAction.Down, ZkAction.Down, ZkAction.Down, ZkAction.Confirm);
+            Check(presses == 1 && mod.SubPage != null, "the button opens the mod's own screen");
+
+            // First row of the new screen is selected: Down then Confirm lands on the second.
+            Do(m, ZkAction.Down, ZkAction.Confirm);
+            Check(inner.Value == 0, "rows of the mod's own screen take input");
+            Check(master.Value == 1, "rows of the mod page do not take input meanwhile");
+            Shot(m, "28-mod-own-screen");
+
+            Do(m, ZkAction.Back);
+            Check(mod.Leaves == 1, "back on the mod's own screen is passed to the mod");
+            Check(mod.Opened && mod.Closes == 0, "back on the mod's own screen does not close the mod page");
+            Check(!h.Closed, "back on the mod's own screen does not close the menu");
+            Shot(m, "29-mod-page-after-own-screen");
+            Do(m, ZkAction.Confirm);
+            Check(presses == 2, "back on the mod page, the button that opened the screen is selected again");
+            Do(m, ZkAction.Back, ZkAction.Up, ZkAction.Up, ZkAction.Confirm);
+            Check(master.Value == 0, "the mod page takes input again");
+            Do(m, ZkAction.Back);
+            Check(!mod.Opened && mod.Closes == 1, "back on the mod page closes it as before");
+
+            // While the mod shows something ZKMM cannot show as a page, the menu draws nothing and ignores input.
+            h = NewHost(); m = new ZkMenu(h);
+            Times(m, ZkAction.Down, 3);
+            Do(m, ZkAction.Confirm);
+            mod = (FakeMod) h.ModList.First(x => ((FakeMod) x).Opened);
+            mod.Hidden = true;
+            Do(m, ZkAction.Back, ZkAction.Down, ZkAction.Confirm);
+            using (SkiaCanvas c = new SkiaCanvas()) {
+                m.Render(c);
+                Check(c.Rects == 0 && c.Texts == 0, "nothing is drawn while a mod's own screen is up");
+            }
+            Check(mod.Opened && !h.Closed, "input is ignored while a mod's own screen is up");
+            mod.Hidden = false;
+            Do(m, ZkAction.Back);
+            Check(!mod.Opened, "the page works again once the mod's own screen is gone");
+        }
+
+        // Who is in charge when a mod opens and closes screens of its own, frame by frame.
+        static void Screens() {
+            const float dt = 1f / 60f;
+            FakeWorld w = null; ZkScreens s = null; FakeMenu page = null;
+
+            void Start() {
+                w = new FakeWorld(); s = new ZkScreens();
+                page = new FakeMenu { Name = "page" };
+                w.Put(page);
+                s.Reset(new object[] { page });
+                w.Remember();
+            }
+            // One frame, the way the game side runs it.
+            ZkScreenState Frame(bool adopt) {
+                ZkScreenState state = s.Step(dt, adopt, w);
+                if (state == ZkScreenState.Page) w.Remember();
+                return state;
+            }
+            ZkScreenState Frames(bool adopt, float seconds) {
+                ZkScreenState state = ZkScreenState.Page;
+                for (float t = 0f; t < seconds; t += dt) { state = Frame(adopt); if (state == ZkScreenState.Stranded || state == ZkScreenState.PauseMenu) break; }
+                return state;
+            }
+
+            foreach (bool adopt in new[] { true, false }) {
+                string mode = adopt ? " (restyled)" : " (as the mod made it)";
+
+                // The softlock from the report: the mod takes the options menu off screen, shows its own menu,
+                // and puts the options menu back when that closes.
+                Start();
+                Check(Frame(adopt) == ZkScreenState.Page && s.PageIsCurrent, "page is in charge to begin with" + mode);
+                FakeMenu own = new FakeMenu { Name = "own" };
+                w.Take(page); w.Put(own);
+                ZkScreenState st = Frame(adopt);
+                if (adopt) Check(st == ZkScreenState.Page && s.CurrentSub == own && w.Log.Contains("adopt own"), "the mod's menu becomes a page" + mode);
+                else Check(st == ZkScreenState.Waiting, "ZKMM waits behind the mod's menu" + mode);
+                Check(Frames(adopt, 5f) != ZkScreenState.Stranded, "an open screen is never taken for a dead end" + mode);
+                w.Take(own); w.Put(page);
+                Check(Frame(adopt) == ZkScreenState.Page && s.PageIsCurrent && s.CurrentSub == null, "options menu put back: the mod page returns" + mode);
+                if (adopt) Check(w.Log.Contains("drop own"), "the closed menu is let go" + mode);
+
+                // The mod goes back to the pause menu when its screen closes.
+                Start(); Frame(adopt);
+                own = new FakeMenu { Name = "own" };
+                w.Take(page); w.Put(own); Frame(adopt);
+                FakeMenu pause = new FakeMenu { Name = "pause" };
+                w.Take(own); w.Pending.Add(pause); w.PauseOpen = true;
+                Check(Frame(adopt) == ZkScreenState.PauseMenu, "pause menu came back: ZKMM leaves" + mode);
+
+                // The mod closes its screen and nothing takes over.
+                Start(); Frame(adopt);
+                own = new FakeMenu { Name = "own" };
+                w.Take(page); w.Put(own); Frame(adopt);
+                w.Take(own);
+                Check(Frame(adopt) == ZkScreenState.Waiting, "a gap of one frame is not a dead end" + mode);
+                Check(Frames(adopt, ZkScreens.StrandedAfter - 0.1f) == ZkScreenState.Waiting, "still waiting just before the limit" + mode);
+                Check(Frames(adopt, 0.3f) == ZkScreenState.Stranded, "nothing took over: the page is loaded again" + mode);
+
+                // ...unless the screen is fading out, which is the game being busy.
+                Start(); Frame(adopt);
+                own = new FakeMenu { Name = "own" };
+                w.Take(page); w.Put(own); Frame(adopt);
+                w.Take(own); w.Fading = true;
+                Check(Frames(adopt, 3f) == ZkScreenState.Waiting, "a fade is not a dead end" + mode);
+                w.Fading = false;
+                Check(Frames(adopt, 1f) == ZkScreenState.Stranded, "after the fade the limit counts again" + mode);
+
+                // Everest's key config: the options menu stays, switched off, under a screen with code of its own.
+                Start(); Frame(adopt);
+                FakeMenu config = new FakeMenu { Name = "keyconfig", Plain = false };
+                page.Focus = false; w.Put(config);
+                Check(Frame(adopt) == ZkScreenState.Waiting && !w.Log.Contains("adopt keyconfig"), "a screen with code of its own is left alone" + mode);
+                Check(Frames(adopt, 5f) == ZkScreenState.Waiting, "waits as long as that screen is up" + mode);
+                w.Take(config); page.Focus = true;
+                Check(Frame(adopt) == ZkScreenState.Page && s.PageIsCurrent, "switched back on: the mod page returns" + mode);
+
+                // The same, but the screen forgets to switch the options menu back on.
+                Start(); Frame(adopt);
+                config = new FakeMenu { Name = "keyconfig", Plain = false };
+                page.Focus = false; w.Put(config); Frame(adopt);
+                w.Take(config);
+                st = Frames(adopt, 1f);
+                Check(st == ZkScreenState.Stranded, "never switched back on: the page is loaded again, not shown dead" + mode);
+
+                // A setting that opens inside the menu: nothing new appears, the menu is only switched off.
+                Start(); Frame(adopt);
+                page.Focus = false;
+                Check(Frame(adopt) == ZkScreenState.Inline, "a setting took the controls: its menu is shown as it is" + mode);
+                Check(Frames(adopt, 5f) == ZkScreenState.Inline, "and stays up as long as the setting keeps the controls" + mode);
+                page.Focus = true;
+                Check(Frame(adopt) == ZkScreenState.Page, "controls handed back: the mod page returns" + mode);
+
+                // A screen that takes a frame to arrive.
+                Start(); Frame(adopt);
+                own = new FakeMenu { Name = "own" };
+                w.Take(page); w.Pending.Add(own);
+                Check(Frame(adopt) == ZkScreenState.Waiting, "a screen on its way counts as there" + mode);
+                w.Pending.Remove(own); w.Put(own);
+                st = Frame(adopt);
+                Check(adopt ? st == ZkScreenState.Page && s.CurrentSub == own : st == ZkScreenState.Waiting, "and is picked up once it arrives" + mode);
+            }
+
+            // A screen opened from a screen, each putting the one before it back when it closes.
+            Start(); Frame(true);
+            FakeMenu first = new FakeMenu { Name = "first" }, second = new FakeMenu { Name = "second" };
+            w.Take(page); w.Put(first);
+            Check(Frame(true) == ZkScreenState.Page && s.CurrentSub == first, "first screen is a page");
+            w.Take(first); w.Put(second);
+            Check(Frame(true) == ZkScreenState.Page && s.CurrentSub == second && s.Subs.Count == 2, "second screen is a page, first is kept for later");
+            w.Take(second); w.Put(first);
+            Check(Frame(true) == ZkScreenState.Page && s.CurrentSub == first && s.Subs.Count == 1, "back from second lands on first");
+            w.Take(first); w.Put(page);
+            Check(Frame(true) == ZkScreenState.Page && s.PageIsCurrent && s.Subs.Count == 0, "back from first lands on the mod page");
+
+            // A screen that jumps straight back to the options menu from two levels down.
+            Start(); Frame(true);
+            first = new FakeMenu { Name = "first" }; second = new FakeMenu { Name = "second" };
+            w.Take(page); w.Put(first); Frame(true);
+            w.Take(first); w.Put(second); Frame(true);
+            w.Take(second); w.Put(page);
+            Check(Frame(true) == ZkScreenState.Page && s.PageIsCurrent && s.Subs.Count == 0, "jumping back two levels lands on the mod page");
+
+            // A plain menu on top of the options menu, which is only switched off.
+            Start(); Frame(true);
+            FakeMenu over = new FakeMenu { Name = "over" };
+            page.Focus = false; w.Put(over);
+            Check(Frame(true) == ZkScreenState.Page && s.CurrentSub == over, "a menu over the switched-off page is a page");
+            w.Take(over); page.Focus = true;
+            Check(Frame(true) == ZkScreenState.Page && s.PageIsCurrent, "closing it lands on the mod page");
+
+            // Back on a restyled screen that saves before it closes: it switches itself off and stays a moment.
+            Start(); Frame(true);
+            FakeMenu saving = new FakeMenu { Name = "saving" };
+            w.Take(page); w.Put(saving); Frame(true);
+            s.NoteBack(); saving.Focus = false;
+            Check(Frames(true, 0.2f) == ZkScreenState.Waiting, "a screen that is closing is not shown as it is");
+            FakeMenu pauseMenu = new FakeMenu { Name = "pause" };
+            w.Take(saving); w.Put(pauseMenu); w.PauseOpen = true;
+            Check(Frame(true) == ZkScreenState.PauseMenu, "and its way out to the pause menu is followed");
+
+            // Back on a restyled screen that has no way out of its own: the game side removes it.
+            Start(); Frame(true);
+            FakeMenu noExit = new FakeMenu { Name = "noexit" };
+            page.Focus = false; w.Put(noExit); Frame(true);
+            s.NoteBack(); w.Take(noExit);
+            Check(Frames(true, 1f) == ZkScreenState.Stranded, "page still switched off afterwards: loaded again, not shown dead");
+
+            // Starting over after a dead end puts the new page in charge.
+            FakeMenu fresh = new FakeMenu { Name = "fresh" };
+            w.Put(fresh); s.Reset(new object[] { fresh }); w.Remember();
+            Check(Frame(true) == ZkScreenState.Page && s.PageIsCurrent, "a page made again is in charge");
         }
 
         static void Main(string[] args) {
@@ -352,6 +606,9 @@ namespace ZKModMenu.Harness {
             // hide empties
             h = NewHost(); h.Opt.ShowEmptyMods = false; m = new ZkMenu(h);
             Shot(m, "27-list-hide-empty");
+
+            SubPages();
+            Screens();
 
             Console.WriteLine(failures == 0 ? "ALL CHECKS PASSED" : failures + " CHECK(S) FAILED");
             Environment.Exit(failures == 0 ? 0 : 1);

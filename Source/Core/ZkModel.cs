@@ -114,6 +114,13 @@ namespace ZKModMenu.Core {
         IReadOnlyList<ZkRow> Rows { get; }
         /// <summary>True while the mod shows a screen of its own (for example a key config screen).</summary>
         bool Suspended { get; }
+        /// <summary>
+        /// The title of a screen the mod opened from its page, while <see cref="Rows"/> holds that screen's rows
+        /// instead of the page's. Null on the mod's own page.
+        /// </summary>
+        string SubPage { get; }
+        /// <summary>Back was pressed on a <see cref="SubPage"/>: ask the mod to close that screen.</summary>
+        void LeaveSubPage();
         void Open();
         void Close();
         /// <summary>Put every setting with a known default back to it and save. Returns how many changed.</summary>
@@ -130,6 +137,8 @@ namespace ZKModMenu.Core {
         bool DetectDefaults { get; set; }
         bool OnlineInfo { get; set; }
         bool HideModOptionsButton { get; set; }
+        /// <summary>Show menus that a mod opens from its page as ZKMM pages too.</summary>
+        bool RestyleModScreens { get; set; }
 
         bool IsFavourite(string id);
         void SetFavourite(string id, bool favourite);

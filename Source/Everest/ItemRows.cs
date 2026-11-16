@@ -60,7 +60,14 @@ namespace ZKModMenu {
         }
 
         public override void Selected() {
-            ItemRows.Guard(() => Item.OnEnter?.Invoke());
+            ItemRows.Guard(() => {
+                // Some mods ask their menu which item is selected.
+                TextMenu container = Item.Container;
+                int index = container != null ? container.Items.IndexOf(Item) : -1;
+                if (index >= 0)
+                    container.Selection = index;
+                Item.OnEnter?.Invoke();
+            });
         }
 
         public override void Deselected() {

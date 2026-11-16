@@ -151,6 +151,7 @@ namespace ZKModMenu {
 
         private void CloseAndResume() {
             Audio.Play(SFX.ui_main_button_back);
+            EverestMod.ResumeFromOpen();
             Shutdown();
             RemoveSelf();
             level.Paused = false;
@@ -175,9 +176,9 @@ namespace ZKModMenu {
             float dt = Engine.RawDeltaTime;
             WarmUp(firstUpdate ? 40.0 : 5.0);
             firstUpdate = false;
-            EverestMod.UpdateOpen();
-            // A mod's button replaced the options menu with a screen of its own. Leave it to that screen.
-            if (EverestMod.TakenOver) {
+            // A mod's button may have opened a screen of the mod's own, or closed one. When such a screen
+            // ends in the pause menu, the pause menu is in charge again and ZKMM leaves.
+            if (!EverestMod.UpdateOpen(level, dt, ZKModMenuModule.Settings.RestyleModScreens)) {
                 ForceClose(false);
                 return;
             }

@@ -284,10 +284,16 @@ namespace ZKModMenu.Core {
                 RefreshRows();
 
             bool isMod = screen == Screen.Mod && mod != null;
-            string name = isMod ? mod.Name : "ZKMM Settings";
-            string description = isMod
-                ? (string.IsNullOrWhiteSpace(mod.Description) ? "No description found for this mod." : mod.Description)
-                : "Change how ZK Mod Menu looks and behaves. The theme changes as soon as you pick it.";
+            // A screen the mod opened from its page: same card, with the screen's own title.
+            string subPage = isMod ? mod.SubPage : null;
+            string name = isMod ? (subPage ?? mod.Name) : "ZKMM Settings";
+            string description;
+            if (subPage != null)
+                description = "More settings of " + mod.Name + ". " + host.Glyph(ZkAction.Back) + " goes back.";
+            else if (isMod)
+                description = string.IsNullOrWhiteSpace(mod.Description) ? "No description found for this mod." : mod.Description;
+            else
+                description = "Change how ZK Mod Menu looks and behaves. The theme changes as soon as you pick it.";
 
             // Header card metrics.
             const float heroY = 76f, badge = 104f;
@@ -356,13 +362,16 @@ namespace ZKModMenu.Core {
             Mask(c, t, viewTop, ViewBottom);
 
             // Header card.
-            DrawCrumbs(c, t, "PAUSE", "ZK MOD MENU", isMod ? name.ToUpperInvariant() : "SETTINGS");
+            if (subPage != null)
+                DrawCrumbs(c, t, "PAUSE", "ZK MOD MENU", mod.Name.ToUpperInvariant(), subPage.ToUpperInvariant());
+            else
+                DrawCrumbs(c, t, "PAUSE", "ZK MOD MENU", isMod ? name.ToUpperInvariant() : "SETTINGS");
             ZkShapes.RoundRect(c, heroX, heroY, ColW, heroH, 22f, t.Surface);
             ZkShapes.RoundRectOutline(c, heroX, heroY, ColW, heroH, 22f, 2f, t.Line);
 
             float by = heroY + 26f;
             if (isMod) {
-                DrawBadge(c, name, heroX + 30f, by, badge, 24f, 0.72f);
+                DrawBadge(c, mod.Name, heroX + 30f, by, badge, 24f, 0.72f);
             } else {
                 ZkShapes.RoundRect(c, heroX + 30f, by, badge, badge, 24f, t.Accent);
                 c.Text("ZK", heroX + 30f + badge / 2f, by + badge / 2f, 0.5f, 0.5f, 0.72f, t.AccentFg);
@@ -598,13 +607,19 @@ namespace ZKModMenu.Core {
             return w;
         }
 
-        private void DrawCrumbs(IZkCanvas c, ZkTheme t, string a, string b, string last) {
+        private void DrawCrumbs(IZkCanvas c, ZkTheme t, params string[] crumbs) {
             const float y = 42f;
             float x = ColX;
-            string[] parts = last == null ? new[] { a, b } : new[] { a, b, last };
-            for (int i = 0; i < parts.Length; i++) {
-                bool final = i == parts.Length - 1;
-                string text = final ? ZkShapes.Ellipsize(c, parts[i], SHead, 900f) : parts[i];
+            List<string> parts = new List<string>();
+            foreach (string crumb in crumbs) {
+                if (crumb != null)
+                    parts.Add(crumb);
+            }
+            for (int i = 0; i < parts.Count; i++) {
+                bool final = i == parts.Count - 1;
+                // The fixed parts are short. The names after them are cut to fit on one line.
+                float room = parts.Count > 3 ? (final ? 560f : 460f) : 900f;
+                string text = i < 2 ? parts[i] : ZkShapes.Ellipsize(c, parts[i], SHead, room);
                 c.Text(text, x, y, 0f, 0.5f, SHead, final ? t.Fg : t.Muted);
                 x += c.TextWidth(text, SHead) + 14f;
                 if (!final) {

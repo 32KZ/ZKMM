@@ -38,6 +38,10 @@ namespace ZKModMenu.Core {
         private readonly ZkRow favRow;
         private readonly ZkRow resetAllRow;
         private readonly ZkRow noSettingsRow = new ZkTextRow(ZkRowKind.Note, "This mod has no settings.");
+        private readonly ZkRow emptyScreenRow = new ZkTextRow(ZkRowKind.Note, "There is nothing to change on this screen.");
+        // The row list on show, and where the selection was on the lists shown before it.
+        private IReadOnlyList<ZkRow> shownRows;
+        private readonly Dictionary<IReadOnlyList<ZkRow>, ZkRow> remembered = new Dictionary<IReadOnlyList<ZkRow>, ZkRow>();
         private List<ZkRow> settingsRows;
         private float pageScroll, pageScrollTarget;
         private ZkKeybindRow listening;
@@ -274,6 +278,8 @@ namespace ZKModMenu.Core {
         private void EnterPage() {
             selected = null;
             selIndex = 0;
+            shownRows = null;
+            remembered.Clear();
             pageScroll = pageScrollTarget = 0f;
             armed = null;
             listening = null;
@@ -287,6 +293,8 @@ namespace ZKModMenu.Core {
             selected = null;
             listening = null;
             armed = null;
+            shownRows = null;
+            remembered.Clear();
 
             IZkMod left = mod;
             if (screen == Screen.Mod && left != null)
@@ -318,9 +326,29 @@ namespace ZKModMenu.Core {
             navRows.Clear();
 
             if (screen == Screen.Mod && mod != null) {
-                pageRows.Add(favRow);
+                // A mod can swap its page for a screen of its own and back. Each has its own rows and selection.
+                IReadOnlyList<ZkRow> rows = mod.Rows;
+                bool subPage = mod.SubPage != null;
+                if (!ReferenceEquals(rows, shownRows)) {
+                    if (shownRows != null) {
+                        if (selected != null)
+                            remembered[shownRows] = selected;
+                        Select(null);
+                        enter = 0f;
+                    }
+                    shownRows = rows;
+                    remembered.TryGetValue(rows, out selected);
+                    selected?.Selected();
+                    selIndex = 0;
+                    armed = null;
+                    listening = null;
+                    pageScroll = pageScrollTarget = 0f;
+                }
+
+                if (!subPage)
+                    pageRows.Add(favRow);
                 bool any = false, resettable = false;
-                foreach (ZkRow row in mod.Rows) {
+                foreach (ZkRow row in rows) {
                     if (!row.Visible)
                         continue;
                     pageRows.Add(row);
@@ -328,7 +356,7 @@ namespace ZKModMenu.Core {
                     resettable |= row.HasDefault;
                 }
                 if (!any)
-                    pageRows.Add(noSettingsRow);
+                    pageRows.Add(subPage ? emptyScreenRow : noSettingsRow);
                 if (resettable)
                     pageRows.Add(resetAllRow);
             } else if (screen == Screen.Settings && settingsRows != null) {
@@ -392,7 +420,12 @@ namespace ZKModMenu.Core {
                     MovePage(6);
                     return;
                 case ZkAction.Back:
-                    LeavePage();
+                    if (screen == Screen.Mod && mod != null && mod.SubPage != null) {
+                        // The mod's own screen closes itself, with its own sound; the page comes back once it has.
+                        mod.LeaveSubPage();
+                    } else {
+                        LeavePage();
+                    }
                     return;
             }
 
@@ -500,6 +533,8 @@ namespace ZKModMenu.Core {
                 "Lets you reset a setting to its default and marks changed settings with a dot. Turn off if a mod's page misbehaves.", true);
             Toggle("Look up author and description online", () => o.OnlineInfo, v => o.OnlineInfo = v, true,
                 "Everest does not store authors or descriptions, so ZKMM reads them from the public Celeste mod database.", true);
+            Toggle("Restyle mods' own screens", () => o.RestyleModScreens, v => o.RestyleModScreens = v, true,
+                "Menus a mod opens from its page are shown as ZKMM pages. Turn off to see them the way the mod made them.");
 
             rows.Add(new ZkTextRow(ZkRowKind.Header, "Pause menu"));
             Toggle("Hide Everest's Mod Options button", () => o.HideModOptionsButton, v => o.HideModOptionsButton = v, false,
@@ -645,6 +680,8 @@ namespace ZKModMenu.Core {
                 selected = null;
                 mod.Close();
             }
+            shownRows = null;
+            remembered.Clear();
             mod = null;
             screen = Screen.List;
             host.SaveOptions();

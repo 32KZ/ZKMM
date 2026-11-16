@@ -95,6 +95,7 @@ Open them with the gear button next to the search box. The same options also app
 | List | Show mods without settings | On | Off hides mods that have nothing to change (favourites and search results still show). |
 | Mod pages | Detect default values | On | Lets ZKMM work out each setting's default so it can be reset. See [How it works](#how-it-works). |
 | Mod pages | Look up author and description online | On | See [How it works](#how-it-works). |
+| Mod pages | Restyle mods' own screens | On | Menus a mod opens from its page are shown as ZKMM pages. Off shows them the way the mod made them, in Celeste's own menu style. |
 | Pause menu | Hide Everest's Mod Options button | Off | Removes the old entry from the pause menu. It stays available from the title screen. |
 | Controls | Favourite / reset to default | X key, X button | Rebinds the X action. |
 | Reset | Clear all favourites | | Press twice to confirm. |
@@ -110,12 +111,12 @@ Open them with the gear button next to the search box. The same options also app
 
 **Where things are saved.** ZKMM's own options and your favourites are stored by Everest in `Saves/modsettings-ZKModMenu.celeste`, like any other mod's settings.
 
-**Mods with their own screens.** Some mods have a button that opens a screen of their own, often in Celeste's normal menu style. When you press one, ZKMM steps aside and is meant to come back once that screen closes. This does not work reliably yet; see [Known limitations](#known-limitations).
+**Mods with their own screens.** Some mods have a button that opens a screen of their own. Such a button expects Everest's Mod Options underneath it, and each mod hands back in its own way: some take the options menu off screen and put it back when their screen closes, some switch it off and on again, some go back to the pause menu. ZKMM follows all of these. A plain menu is shown as a ZKMM page of its own, with the mod's name in the trail at the top, and Back does whatever that menu does when it is backed out of. A screen with code of its own (Everest's key config screens, for example) is shown as the mod made it while ZKMM waits behind it. A setting that opens inside the options menu itself is shown in that menu, in Celeste's own style, until it hands the controls back. If a screen goes back to the pause menu, ZKMM closes. And if a screen closes without handing back to anything, ZKMM loads the mod's page again after a moment, so the game is never left paused with nothing on screen.
 
 ## Known limitations
 
 - **Not yet run in game.** See the status note at the top. The first in-game runs will very likely need small fixes.
-- **Backing out of a mod's own screen can softlock the game.** Some mods open a detailed menu of their own in Celeste's normal style. Leaving that menu with Back can leave the game stuck. This is being looked into; until it is fixed, avoid those buttons inside ZKMM and use Everest's Mod Options for them.
+- **Mods' own screens are followed, not understood.** ZKMM works out what a mod's screen is doing by watching the menus (see [How it works](#how-it-works)). The ways mods usually do this are covered, and a screen that leaves nothing behind is caught, but a mod that draws a screen without using a menu at all may look wrong inside ZKMM. If a restyled screen misbehaves, turn **Restyle mods' own screens** off; if it still does, use Everest's Mod Options for that mod and please report it.
 - **Online lookup untested.** The author and description download is written from the database's documented format but has not been tested against the live server.
 - **Title screen only settings.** Settings a mod only offers from the title screen do not appear, exactly as in Everest's in-game Mod Options. Use Everest's Mod Options on the title screen for those.
 - **Pause menu only.** ZK Mod Menu is opened from the pause menu in a level. On the title screen, use Everest's Mod Options.
@@ -163,7 +164,8 @@ Source/Everest/   The connection to the game: the pause menu entry, input, drawi
                   turns each mod's Everest menu items into rows.
 Dialog/           ZKMM's text for Everest's Mod Options.
 Harness/          A development tool, not part of the mod. It draws the Core to PNG files
-                  with made-up mods and runs navigation checks.
+                  with made-up mods, runs navigation checks, and plays through the ways
+                  mods open and close screens of their own.
 ```
 
 Because the Core has no game dependency, most of the menu can be worked on without starting Celeste:
