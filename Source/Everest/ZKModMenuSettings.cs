@@ -25,7 +25,12 @@ namespace ZKModMenu {
 
         public bool LookUpModInfoOnline { get; set; } = true;
 
+        public bool ShowModImages { get; set; } = true;
+
         public bool HideModOptionsButton { get; set; } = false;
+
+        /// <summary>Show menus that a mod opens from its page as ZKMM pages, instead of in Celeste's own menu style.</summary>
+        public bool RestyleModScreens { get; set; } = true;
 
         /// <summary>The "other action" button: favourite a mod in the list, reset a setting on a mod page.</summary>
         [DefaultButtonBinding(Buttons.X, Keys.X)]
@@ -60,6 +65,11 @@ namespace ZKModMenu {
         bool IZkOptions.OnlineInfo {
             get => LookUpModInfoOnline;
             set => LookUpModInfoOnline = value;
+        }
+
+        bool IZkOptions.ShowImages {
+            get => ShowModImages;
+            set => ShowModImages = value;
         }
 
         bool IZkOptions.IsFavourite(string id) {

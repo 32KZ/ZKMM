@@ -221,7 +221,11 @@ namespace ZKModMenu.Core {
 
             float badge = compact ? 38f : 56f;
             float bx = sx + 18f;
-            DrawBadge(c, m.Name, bx, cy - badge / 2f, badge, compact ? 10f : 15f, compact ? 0.3f : 0.42f);
+            ZkImage thumb = m.Thumb;
+            if (thumb != null)
+                c.Image(thumb, 0f, 0f, 1f, 1f, bx, cy - badge / 2f, badge, badge);
+            else
+                DrawBadge(c, m.Name, bx, cy - badge / 2f, badge, compact ? 10f : 15f, compact ? 0.3f : 0.42f);
             float tx = bx + badge + 20f;
 
             float rx = sx + rw - 24f;
@@ -284,15 +288,23 @@ namespace ZKModMenu.Core {
                 RefreshRows();
 
             bool isMod = screen == Screen.Mod && mod != null;
-            string name = isMod ? mod.Name : "ZKMM Settings";
-            string description = isMod
-                ? (string.IsNullOrWhiteSpace(mod.Description) ? "No description found for this mod." : mod.Description)
-                : "Change how ZK Mod Menu looks and behaves. The theme changes as soon as you pick it.";
+            // A screen the mod opened from its page: same card, with the screen's own title.
+            string subPage = isMod ? mod.SubPage : null;
+            string name = isMod ? (subPage ?? mod.Name) : "ZKMM Settings";
+            string description;
+            if (subPage != null)
+                description = "More settings of " + mod.Name + ". " + host.Glyph(ZkAction.Back) + " goes back.";
+            else if (isMod)
+                description = string.IsNullOrWhiteSpace(mod.Description) ? "No description found for this mod." : mod.Description;
+            else
+                description = "Change how ZK Mod Menu looks and behaves. The theme changes as soon as you pick it.";
 
-            // Header card metrics.
+            // Header card metrics. A mod with a picture shows it in 16:9 where the letter badge would be.
             const float heroY = 76f, badge = 104f;
+            ZkImage banner = isMod && subPage == null ? mod.Banner : null;
+            float badgeW = banner != null ? (float) Math.Round(badge * 16f / 9f) : badge;
             float heroX = ColX + slide;
-            float tx = heroX + 30f + badge + 28f;
+            float tx = heroX + 30f + badgeW + 28f;
             float tw = heroX + ColW - 30f - tx;
             List<string> lines = ZkShapes.Wrap(c, description, SValue, tw, 3);
             float nameH = c.LineHeight(SName);
@@ -356,13 +368,18 @@ namespace ZKModMenu.Core {
             Mask(c, t, viewTop, ViewBottom);
 
             // Header card.
-            DrawCrumbs(c, t, "PAUSE", "ZK MOD MENU", isMod ? name.ToUpperInvariant() : "SETTINGS");
+            if (subPage != null)
+                DrawCrumbs(c, t, "PAUSE", "ZK MOD MENU", mod.Name.ToUpperInvariant(), subPage.ToUpperInvariant());
+            else
+                DrawCrumbs(c, t, "PAUSE", "ZK MOD MENU", isMod ? name.ToUpperInvariant() : "SETTINGS");
             ZkShapes.RoundRect(c, heroX, heroY, ColW, heroH, 22f, t.Surface);
             ZkShapes.RoundRectOutline(c, heroX, heroY, ColW, heroH, 22f, 2f, t.Line);
 
             float by = heroY + 26f;
-            if (isMod) {
-                DrawBadge(c, name, heroX + 30f, by, badge, 24f, 0.72f);
+            if (banner != null) {
+                c.Image(banner, 0f, 0f, 1f, 1f, heroX + 30f, by, badgeW, badge);
+            } else if (isMod) {
+                DrawBadge(c, mod.Name, heroX + 30f, by, badge, 24f, 0.72f);
             } else {
                 ZkShapes.RoundRect(c, heroX + 30f, by, badge, badge, 24f, t.Accent);
                 c.Text("ZK", heroX + 30f + badge / 2f, by + badge / 2f, 0.5f, 0.5f, 0.72f, t.AccentFg);
@@ -512,6 +529,37 @@ namespace ZKModMenu.Core {
                     return used;
                 }
 
+                case ZkRowKind.Text: {
+                    bool editing = row == editRow;
+                    string value = editing ? draft : (row as IZkTextEdit)?.Text ?? row.ValueText ?? "";
+                    bool isColour = ZkColor.TryParseHex(value, out ZkColor colour);
+                    const float boxH = 46f;
+                    float swatch = isColour ? boxH - 14f : 0f;
+                    string shown = value.Length == 0 && !editing ? "Empty" : ZkShapes.Ellipsize(c, value, SValue, 480f);
+                    float textW = c.TextWidth(shown, SValue);
+                    float boxW = Math.Max(editing ? 300f : 200f, 32f + (isColour ? swatch + 14f : 0f) + textW + (editing ? 10f : 0f));
+                    float bx = rx - boxW;
+                    ZkShapes.RoundRect(c, bx, cy - boxH / 2f, boxW, boxH, 11f, editing ? t.Page : t.Surface2.Fade(dim));
+                    ZkShapes.RoundRectOutline(c, bx, cy - boxH / 2f, boxW, boxH, 11f, editing ? 3f : 1f, editing ? t.Accent : t.Line);
+                    float textX = bx + 16f;
+                    if (isColour) {
+                        float sy = cy - swatch / 2f;
+                        if (colour.A < 255) {
+                            // A see-through colour: show it over a checkerboard.
+                            ZkShapes.RoundRect(c, textX, sy, swatch, swatch, 7f, ZkColor.White);
+                            c.Rect(textX + swatch / 2f, sy, swatch / 2f - 3f, swatch / 2f, new ZkColor(190, 190, 190));
+                            c.Rect(textX + 3f, sy + swatch / 2f, swatch / 2f - 3f, swatch / 2f - 3f, new ZkColor(190, 190, 190));
+                        }
+                        ZkShapes.RoundRect(c, textX, sy, swatch, swatch, 7f, colour);
+                        ZkShapes.RoundRectOutline(c, textX, sy, swatch, swatch, 7f, 2f, t.Line);
+                        textX += swatch + 14f;
+                    }
+                    c.Text(shown, textX, cy, 0f, 0.5f, SValue, (value.Length == 0 && !editing ? t.Muted : t.Fg).Fade(dim));
+                    if (editing && time % 1f < 0.55f)
+                        c.Rect(textX + textW + 4f, cy - 15f, 3f, 30f, t.Accent);
+                    return boxW;
+                }
+
                 case ZkRowKind.Button: {
                     string value = row.ValueText;
                     string hint = disabled ? "Not available here" : !string.IsNullOrEmpty(value) ? value : "Press " + host.Glyph(ZkAction.Confirm);
@@ -598,13 +646,19 @@ namespace ZKModMenu.Core {
             return w;
         }
 
-        private void DrawCrumbs(IZkCanvas c, ZkTheme t, string a, string b, string last) {
+        private void DrawCrumbs(IZkCanvas c, ZkTheme t, params string[] crumbs) {
             const float y = 42f;
             float x = ColX;
-            string[] parts = last == null ? new[] { a, b } : new[] { a, b, last };
-            for (int i = 0; i < parts.Length; i++) {
-                bool final = i == parts.Length - 1;
-                string text = final ? ZkShapes.Ellipsize(c, parts[i], SHead, 900f) : parts[i];
+            List<string> parts = new List<string>();
+            foreach (string crumb in crumbs) {
+                if (crumb != null)
+                    parts.Add(crumb);
+            }
+            for (int i = 0; i < parts.Count; i++) {
+                bool final = i == parts.Count - 1;
+                // The fixed parts are short. The names after them are cut to fit on one line.
+                float room = parts.Count > 3 ? (final ? 560f : 460f) : 900f;
+                string text = i < 2 ? parts[i] : ZkShapes.Ellipsize(c, parts[i], SHead, room);
                 c.Text(text, x, y, 0f, 0.5f, SHead, final ? t.Fg : t.Muted);
                 x += c.TextWidth(text, SHead) + 14f;
                 if (!final) {
@@ -632,6 +686,13 @@ namespace ZKModMenu.Core {
                 Hint("Any key", "Bind");
                 Hint("Del", "Clear");
                 Hint("Bksp", "Cancel");
+                return;
+            }
+            if (typing && editRow != null) {
+                Hint("Type", "Edit");
+                Hint("Enter", "Save");
+                Hint("Bksp", "Delete");
+                Hint("Esc", "Cancel");
                 return;
             }
             if (typing) {
@@ -681,6 +742,9 @@ namespace ZKModMenu.Core {
                         break;
                     case ZkRowKind.Button:
                         Hint(confirm, "Press");
+                        break;
+                    case ZkRowKind.Text:
+                        Hint(confirm, "Type a new value");
                         break;
                 }
                 if (row.HasDefault && row.Kind != ZkRowKind.Button)

@@ -38,9 +38,16 @@ namespace ZKModMenu.Core {
         private readonly ZkRow favRow;
         private readonly ZkRow resetAllRow;
         private readonly ZkRow noSettingsRow = new ZkTextRow(ZkRowKind.Note, "This mod has no settings.");
+        private readonly ZkRow emptyScreenRow = new ZkTextRow(ZkRowKind.Note, "There is nothing to change on this screen.");
+        // The row list on show, and where the selection was on the lists shown before it.
+        private IReadOnlyList<ZkRow> shownRows;
+        private readonly Dictionary<IReadOnlyList<ZkRow>, ZkRow> remembered = new Dictionary<IReadOnlyList<ZkRow>, ZkRow>();
         private List<ZkRow> settingsRows;
         private float pageScroll, pageScrollTarget;
         private ZkKeybindRow listening;
+        // A text setting being typed into, and what has been typed so far. While set, typing goes here, not to the search.
+        private ZkRow editRow;
+        private string draft = "";
 
         // ---- feedback
         private float enter = 1f;
@@ -55,8 +62,11 @@ namespace ZKModMenu.Core {
             resetAllRow = new ResetAllRow(this);
         }
 
-        /// <summary>True while the search box is taking text.</summary>
+        /// <summary>True while the search box or a text setting is taking text.</summary>
         public bool Typing => typing;
+
+        /// <summary>True while a text setting on a page is being typed into.</summary>
+        public bool Editing => editRow != null;
 
         /// <summary>The keybind row waiting for a key press, if any.</summary>
         public ZkKeybindRow Listening => listening;
@@ -140,10 +150,20 @@ namespace ZKModMenu.Core {
                 listPos = 1;
         }
 
-        /// <summary>A printable character typed into the search box.</summary>
+        /// <summary>A printable character typed into the search box or the text setting being edited.</summary>
         public void TypeChar(char c) {
             if (!typing || char.IsControl(c))
                 return;
+            if (editRow != null) {
+                IZkTextEdit edit = (IZkTextEdit) editRow;
+                if (draft.Length >= Math.Max(1, edit.MaxLength)) {
+                    host.Play(ZkSound.Invalid);
+                    return;
+                }
+                draft += c;
+                host.Play(ZkSound.Type);
+                return;
+            }
             if (query.Length >= 30) {
                 host.Play(ZkSound.Invalid);
                 return;
@@ -157,6 +177,27 @@ namespace ZKModMenu.Core {
         public void TypingKey(ZkTypingKey key) {
             if (!typing)
                 return;
+            if (editRow != null) {
+                switch (key) {
+                    case ZkTypingKey.Enter:
+                    case ZkTypingKey.Down:
+                        CommitEdit();
+                        break;
+                    case ZkTypingKey.Escape:
+                        StopEditing();
+                        Toast("Not changed");
+                        break;
+                    case ZkTypingKey.Backspace:
+                        if (draft.Length > 0) {
+                            draft = draft.Substring(0, draft.Length - 1);
+                            host.Play(ZkSound.Erase);
+                        } else {
+                            host.Play(ZkSound.Invalid);
+                        }
+                        break;
+                }
+                return;
+            }
             switch (key) {
                 case ZkTypingKey.Enter:
                 case ZkTypingKey.Down:
@@ -175,6 +216,50 @@ namespace ZKModMenu.Core {
                     }
                     break;
             }
+        }
+
+        // ---- typing into a text setting
+
+        private void StartEditing(ZkRow row) {
+            if (typing || !(row is IZkTextEdit edit))
+                return;
+            typing = true;
+            editRow = row;
+            draft = edit.Text ?? "";
+            host.Play(ZkSound.ToggleOn);
+            host.BeginTyping();
+        }
+
+        private void StopEditing() {
+            if (editRow == null)
+                return;
+            editRow = null;
+            draft = "";
+            typing = false;
+            host.Play(ZkSound.ToggleOff);
+            host.EndTyping();
+        }
+
+        private void CommitEdit() {
+            IZkTextEdit edit = (IZkTextEdit) editRow;
+            string value = draft;
+            if (value == (edit.Text ?? "")) {
+                StopEditing();
+                return;
+            }
+            if (value.Length < edit.MinLength) {
+                host.Play(ZkSound.Invalid);
+                Toast(edit.MinLength == 1 ? "This setting cannot be empty" : "Type at least " + edit.MinLength + " characters");
+                return;
+            }
+            if (!edit.TrySet(value, out string error)) {
+                host.Play(ZkSound.Invalid);
+                Toast(string.IsNullOrEmpty(error) ? "That value is not allowed" : error);
+                return;
+            }
+            string label = editRow.Label;
+            StopEditing();
+            Toast(label + " saved");
         }
 
         private void ActList(ZkAction action) {
@@ -274,6 +359,8 @@ namespace ZKModMenu.Core {
         private void EnterPage() {
             selected = null;
             selIndex = 0;
+            shownRows = null;
+            remembered.Clear();
             pageScroll = pageScrollTarget = 0f;
             armed = null;
             listening = null;
@@ -287,6 +374,8 @@ namespace ZKModMenu.Core {
             selected = null;
             listening = null;
             armed = null;
+            shownRows = null;
+            remembered.Clear();
 
             IZkMod left = mod;
             if (screen == Screen.Mod && left != null)
@@ -318,9 +407,29 @@ namespace ZKModMenu.Core {
             navRows.Clear();
 
             if (screen == Screen.Mod && mod != null) {
-                pageRows.Add(favRow);
+                // A mod can swap its page for a screen of its own and back. Each has its own rows and selection.
+                IReadOnlyList<ZkRow> rows = mod.Rows;
+                bool subPage = mod.SubPage != null;
+                if (!ReferenceEquals(rows, shownRows)) {
+                    if (shownRows != null) {
+                        if (selected != null)
+                            remembered[shownRows] = selected;
+                        Select(null);
+                        enter = 0f;
+                    }
+                    shownRows = rows;
+                    remembered.TryGetValue(rows, out selected);
+                    selected?.Selected();
+                    selIndex = 0;
+                    armed = null;
+                    listening = null;
+                    pageScroll = pageScrollTarget = 0f;
+                }
+
+                if (!subPage)
+                    pageRows.Add(favRow);
                 bool any = false, resettable = false;
-                foreach (ZkRow row in mod.Rows) {
+                foreach (ZkRow row in rows) {
                     if (!row.Visible)
                         continue;
                     pageRows.Add(row);
@@ -328,7 +437,7 @@ namespace ZKModMenu.Core {
                     resettable |= row.HasDefault;
                 }
                 if (!any)
-                    pageRows.Add(noSettingsRow);
+                    pageRows.Add(subPage ? emptyScreenRow : noSettingsRow);
                 if (resettable)
                     pageRows.Add(resetAllRow);
             } else if (screen == Screen.Settings && settingsRows != null) {
@@ -392,7 +501,12 @@ namespace ZKModMenu.Core {
                     MovePage(6);
                     return;
                 case ZkAction.Back:
-                    LeavePage();
+                    if (screen == Screen.Mod && mod != null && mod.SubPage != null) {
+                        // The mod's own screen closes itself, with its own sound; the page comes back once it has.
+                        mod.LeaveSubPage();
+                    } else {
+                        LeavePage();
+                    }
                     return;
             }
 
@@ -424,7 +538,10 @@ namespace ZKModMenu.Core {
                     break;
 
                 case ZkAction.Confirm:
-                    if (row is ZkKeybindRow keybind) {
+                    if (row.Kind == ZkRowKind.Text) {
+                        if (!row.Disabled)
+                            StartEditing(row);
+                    } else if (row is ZkKeybindRow keybind) {
                         listening = keybind;
                         host.Play(ZkSound.Select);
                         host.BeginListening(keybind);
@@ -492,6 +609,8 @@ namespace ZKModMenu.Core {
 
             rows.Add(new ZkTextRow(ZkRowKind.Header, "List"));
             Toggle("Show author and version in list", () => o.ShowMeta, v => o.ShowMeta = v, true);
+            Toggle("Show mod pictures", () => o.ShowImages, v => o.ShowImages = v, true,
+                "Each mod's first screenshot from the public Celeste mod database, in the list and on its page.", true);
             Toggle("Show mods without settings", () => o.ShowEmptyMods, v => o.ShowEmptyMods = v, true,
                 "Turn off to hide mods that have nothing to set up. Favourites and search results always show.");
 
@@ -500,6 +619,8 @@ namespace ZKModMenu.Core {
                 "Lets you reset a setting to its default and marks changed settings with a dot. Turn off if a mod's page misbehaves.", true);
             Toggle("Look up author and description online", () => o.OnlineInfo, v => o.OnlineInfo = v, true,
                 "Everest does not store authors or descriptions, so ZKMM reads them from the public Celeste mod database.", true);
+            Toggle("Restyle mods' own screens", () => o.RestyleModScreens, v => o.RestyleModScreens = v, true,
+                "Menus a mod opens from its page are shown as ZKMM pages. Turn off to see them the way the mod made them.");
 
             rows.Add(new ZkTextRow(ZkRowKind.Header, "Pause menu"));
             Toggle("Hide Everest's Mod Options button", () => o.HideModOptionsButton, v => o.HideModOptionsButton = v, false,
@@ -620,6 +741,9 @@ namespace ZKModMenu.Core {
                 EnsureList();
             else if (!Suspended)
                 RefreshRows();
+            // The setting being typed into went away (the mod hid it, or swapped the page): stop typing.
+            if (editRow != null && (screen == Screen.List || Suspended || !pageRows.Contains(editRow)))
+                StopEditing();
 
             listScroll = Approach(listScroll, listScrollTarget, dt, animate);
             pageScroll = Approach(pageScroll, pageScrollTarget, dt, animate);
@@ -637,6 +761,8 @@ namespace ZKModMenu.Core {
         public void Shutdown() {
             if (typing) {
                 typing = false;
+                editRow = null;
+                draft = "";
                 host.EndTyping();
             }
             listening = null;
@@ -645,6 +771,8 @@ namespace ZKModMenu.Core {
                 selected = null;
                 mod.Close();
             }
+            shownRows = null;
+            remembered.Clear();
             mod = null;
             screen = Screen.List;
             host.SaveOptions();

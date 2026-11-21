@@ -16,9 +16,11 @@ namespace ZKModMenu {
     ///
     /// Everest keeps neither (a mod's everest.yaml only has its name and version), so they come from
     /// the public Celeste mod database that Everest's own mod updater and Olympus use:
-    ///   everest_update.yaml       mod name -> GameBanana id
-    ///   mod_search_database.yaml  GameBanana id -> name, author, description
-    /// The result is kept in Everest's cache folder and refreshed once a week, in the background.
+    ///   everest_update.yaml       mod name -> the GameBanana file it is downloaded from
+    ///   mod_search_database.yaml  GameBanana page -> its files, author, description and screenshots
+    /// The two are joined on the file. (Older copies of the update list named the GameBanana page directly;
+    /// that is still understood.) The result is kept in Everest's cache folder and refreshed once a week,
+    /// in the background.
     /// Everything here is best effort: without a connection the menu simply shows no author.
     /// </summary>
     internal static class ModInfoDatabase {
@@ -26,10 +28,12 @@ namespace ZKModMenu {
         public struct Info {
             public string Author;
             public string Description;
+            /// <summary>Addresses of the mod's first screenshot, best first. Never null.</summary>
+            public string[] Images;
         }
 
         private const int MaxAgeDays = 7;
-        private const string CacheHeader = "ZKMM-MODINFO-1";
+        private const string CacheHeader = "ZKMM-MODINFO-2";
 
         private static readonly string[] UpdateListUrls = {
             "https://maddie480.ovh/celeste/everest_update.yaml",
@@ -145,7 +149,8 @@ namespace ZKModMenu {
                     string[] parts = line.Split('\t');
                     if (parts.Length < 3 || parts[0].Length == 0)
                         continue;
-                    loaded[parts[0]] = new Info { Author = parts[1], Description = parts[2] };
+                    string[] images = parts.Length > 3 && parts[3].Length > 0 ? parts[3].Split(' ') : Array.Empty<string>();
+                    loaded[parts[0]] = new Info { Author = parts[1], Description = parts[2], Images = images };
                 }
                 cacheTime = new DateTime(ticks, DateTimeKind.Utc);
             }
@@ -167,7 +172,9 @@ namespace ZKModMenu {
                     writer.Write('\t');
                     writer.Write(Clean(pair.Value.Author));
                     writer.Write('\t');
-                    writer.WriteLine(Clean(pair.Value.Description));
+                    writer.Write(Clean(pair.Value.Description));
+                    writer.Write('\t');
+                    writer.WriteLine(Clean(string.Join(" ", pair.Value.Images ?? Array.Empty<string>())));
                 }
             }
             if (File.Exists(path))
@@ -182,16 +189,17 @@ namespace ZKModMenu {
             using (HttpClient client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(3) }) {
                 client.DefaultRequestHeaders.UserAgent.ParseAdd("ZKModMenu/" + ZKModMenuModule.VersionText);
 
-                // GameBanana page ("Mod/12345") -> names of the mods published there.
+                // "file:12345" (a GameBanana download) or "page:Mod/12345" -> names of the mods published there.
                 Dictionary<string, List<string>> names = new Dictionary<string, List<string>>();
                 Download(client, UpdateListUrls, reader => ReadUpdateList(reader, names));
                 if (names.Count == 0)
                     throw new InvalidDataException("the mod list was empty");
+                Logger.Log(LogLevel.Info, ZKModMenuModule.LogTag, "Read the mod list: " + names.Count + " downloads.");
 
                 Dictionary<string, Info> result = new Dictionary<string, Info>(StringComparer.OrdinalIgnoreCase);
                 Download(client, SearchDatabaseUrls, reader => ReadSearchDatabase(reader, names, result));
                 if (result.Count == 0)
-                    throw new InvalidDataException("the mod database was empty");
+                    throw new InvalidDataException("no mod in the database matched the mod list");
 
                 DateTime now = DateTime.UtcNow;
                 infos = result;
@@ -231,13 +239,28 @@ namespace ZKModMenu {
             public bool IsMap;
             public bool ExpectKey;
             public string Key;
+            /// <summary>The key this list or mapping is the value of (null for list entries and the document).</summary>
+            public string Owner;
+        }
+
+        /// <summary>The nearest key that encloses the top of the stack, such as "Files" for a file's mapping.</summary>
+        private static string Context(List<Frame> stack) {
+            for (int i = stack.Count - 1; i >= 0; i--) {
+                if (stack[i].Owner != null)
+                    return stack[i].Owner;
+            }
+            return null;
         }
 
         /// <summary>
         /// Walk a YAML document without building it in memory (the mod database is large).
         /// Depth 1 is the outermost list or mapping.
+        /// <paramref name="pair"/> gets (depth, key, value, context) for each key: value of a mapping, and
+        /// <paramref name="item"/> gets (depth, context, value) for each plain value of a list, where context is
+        /// the nearest enclosing key.
         /// </summary>
-        private static void Walk(TextReader reader, Action<int, string> mapStart, Action<int, string, string> pair, Action<int> mapEnd) {
+        private static void Walk(TextReader reader, Action<int, string> mapStart, Action<int, string, string, string> pair, Action<int> mapEnd,
+            Action<int, string, string> item = null) {
             Parser parser = new Parser(reader);
             List<Frame> stack = new List<Frame>();
 
@@ -251,9 +274,11 @@ namespace ZKModMenu {
                             top.Key = scalar.Value;
                             top.ExpectKey = false;
                         } else {
-                            pair(stack.Count, top.Key, scalar.Value);
+                            pair(stack.Count, top.Key, scalar.Value, Context(stack));
                             top.ExpectKey = true;
                         }
+                    } else if (top != null) {
+                        item?.Invoke(stack.Count, Context(stack), scalar.Value);
                     }
                 } else if (current is AnchorAlias) {
                     if (top != null && top.IsMap) {
@@ -268,7 +293,7 @@ namespace ZKModMenu {
                         top.ExpectKey = true;
                     }
                     bool isMap = current is MappingStart;
-                    stack.Add(new Frame { IsMap = isMap, ExpectKey = true });
+                    stack.Add(new Frame { IsMap = isMap, ExpectKey = true, Owner = key });
                     if (isMap)
                         mapStart(stack.Count, key);
                 } else if (current is MappingEnd) {
@@ -282,50 +307,44 @@ namespace ZKModMenu {
             }
         }
 
+        /// <summary>The GameBanana file id at the end of a download address such as https://gamebanana.com/mmdl/12345.</summary>
+        internal static string FileKey(string url) {
+            if (string.IsNullOrEmpty(url))
+                return null;
+            int slash = url.TrimEnd('/').LastIndexOf('/');
+            string last = url.TrimEnd('/').Substring(slash + 1);
+            if (last.Length == 0)
+                return null;
+            foreach (char c in last) {
+                if (c < '0' || c > '9')
+                    return null;
+            }
+            return "file:" + last;
+        }
+
+        private static void AddName(Dictionary<string, List<string>> names, string key, string name) {
+            if (key == null)
+                return;
+            if (!names.TryGetValue(key, out List<string> list))
+                names[key] = list = new List<string>();
+            if (!list.Contains(name))
+                list.Add(name);
+        }
+
         // ModName:
-        //   GameBananaType: Mod
-        //   GameBananaId: 12345
-        private static void ReadUpdateList(TextReader reader, Dictionary<string, List<string>> names) {
-            string name = null, type = null, id = null;
+        //   URL: https://gamebanana.com/mmdl/12345
+        //   MirrorName: '12345'
+        //   (older lists: GameBananaType: Mod, GameBananaId: 678)
+        internal static void ReadUpdateList(TextReader reader, Dictionary<string, List<string>> names) {
+            string name = null, type = null, id = null, url = null, mirror = null;
             Walk(reader,
                 (depth, key) => {
                     if (depth == 2) {
                         name = key;
-                        type = id = null;
+                        type = id = url = mirror = null;
                     }
                 },
-                (depth, key, value) => {
-                    if (depth != 2)
-                        return;
-                    if (key == "GameBananaType")
-                        type = value;
-                    else if (key == "GameBananaId")
-                        id = value;
-                },
-                depth => {
-                    if (depth != 2 || name == null || type == null || id == null)
-                        return;
-                    string page = type + "/" + id;
-                    if (!names.TryGetValue(page, out List<string> list))
-                        names[page] = list = new List<string>();
-                    list.Add(name);
-                    name = null;
-                });
-        }
-
-        // - GameBananaType: Mod
-        //   GameBananaId: 12345
-        //   Name: ...
-        //   Author: ...
-        //   Description: ...
-        private static void ReadSearchDatabase(TextReader reader, Dictionary<string, List<string>> names, Dictionary<string, Info> result) {
-            string type = null, id = null, author = null, description = null;
-            Walk(reader,
-                (depth, key) => {
-                    if (depth == 2)
-                        type = id = author = description = null;
-                },
-                (depth, key, value) => {
+                (depth, key, value, context) => {
                     if (depth != 2)
                         return;
                     switch (key) {
@@ -335,22 +354,140 @@ namespace ZKModMenu {
                         case "GameBananaId":
                             id = value;
                             break;
-                        case "Author":
-                            author = value;
+                        case "URL":
+                            url = value;
                             break;
-                        case "Description":
-                            description = value;
+                        case "MirrorName":
+                            mirror = value;
                             break;
                     }
                 },
                 depth => {
-                    if (depth != 2 || type == null || id == null)
+                    if (depth != 2 || name == null)
                         return;
-                    if (!names.TryGetValue(type + "/" + id, out List<string> list))
+                    if (type != null && id != null)
+                        AddName(names, "page:" + type + "/" + id, name);
+                    string file = FileKey(url);
+                    if (file == null && !string.IsNullOrEmpty(mirror))
+                        file = FileKey("/" + mirror);
+                    AddName(names, file, name);
+                    name = null;
+                });
+        }
+
+        /// <summary>"page:Mod/12345" from https://gamebanana.com/mods/12345.</summary>
+        private static string PageKey(string pageUrl) {
+            if (string.IsNullOrEmpty(pageUrl))
+                return null;
+            string[] parts = pageUrl.TrimEnd('/').Split('/');
+            if (parts.Length < 2)
+                return null;
+            string section = parts[parts.Length - 2];
+            string number = parts[parts.Length - 1];
+            if (section.Length < 2 || number.Length == 0)
+                return null;
+            // "mods" -> "Mod", "tools" -> "Tool", "wips" -> "Wip"
+            if (section.EndsWith("s"))
+                section = section.Substring(0, section.Length - 1);
+            section = char.ToUpperInvariant(section[0]) + section.Substring(1);
+            return "page:" + section + "/" + number;
+        }
+
+        /// <summary>Only images the game can open (PNG and JPEG; GameBanana's WebP cannot be).</summary>
+        private static bool CanOpen(string url) {
+            if (string.IsNullOrEmpty(url))
+                return false;
+            string lower = url.ToLowerInvariant();
+            return lower.StartsWith("https://") && (lower.EndsWith(".png") || lower.EndsWith(".jpg") || lower.EndsWith(".jpeg"));
+        }
+
+        // - GameBananaType: Mod            (older databases)
+        //   GameBananaId: 12345            (older databases)
+        //   PageURL: https://gamebanana.com/mods/12345
+        //   Author: ...
+        //   Description: ...
+        //   Files:
+        //   - URL: https://gamebanana.com/mmdl/67890
+        //   MirroredScreenshots:
+        //   - https://.../img_ss_mods_abc.png
+        //   Screenshots:
+        //   - https://images.gamebanana.com/img/ss/mods/abc.jpg
+        internal static void ReadSearchDatabase(TextReader reader, Dictionary<string, List<string>> names, Dictionary<string, Info> result) {
+            string type = null, id = null, page = null, author = null, description = null;
+            List<string> files = new List<string>();
+            string mirrored = null, original = null;
+
+            Walk(reader,
+                (depth, key) => {
+                    if (depth == 2) {
+                        type = id = page = author = description = mirrored = original = null;
+                        files.Clear();
+                    }
+                },
+                (depth, key, value, context) => {
+                    if (depth == 2) {
+                        switch (key) {
+                            case "GameBananaType":
+                                type = value;
+                                break;
+                            case "GameBananaId":
+                                id = value;
+                                break;
+                            case "PageURL":
+                                page = value;
+                                break;
+                            case "Author":
+                                author = value;
+                                break;
+                            case "Description":
+                                description = value;
+                                break;
+                        }
+                    } else if (depth == 4 && context == "Files" && key == "URL") {
+                        // A file of the entry.
+                        string file = FileKey(value);
+                        if (file != null)
+                            files.Add(file);
+                    }
+                },
+                depth => {
+                    if (depth != 2)
                         return;
-                    Info info = new Info { Author = Clean(author), Description = Clean(description) };
-                    foreach (string name in list)
+
+                    List<string> matched = new List<string>();
+                    void Match(string key) {
+                        if (key != null && names.TryGetValue(key, out List<string> found)) {
+                            foreach (string n in found) {
+                                if (!matched.Contains(n))
+                                    matched.Add(n);
+                            }
+                        }
+                    }
+                    foreach (string file in files)
+                        Match(file);
+                    if (type != null && id != null)
+                        Match("page:" + type + "/" + id);
+                    Match(PageKey(page));
+                    if (matched.Count == 0)
+                        return;
+
+                    List<string> images = new List<string>();
+                    if (CanOpen(mirrored))
+                        images.Add(mirrored);
+                    if (CanOpen(original))
+                        images.Add(original);
+                    Info info = new Info { Author = Clean(author), Description = Clean(description), Images = images.ToArray() };
+                    foreach (string name in matched)
                         result[name] = info;
+                },
+                (depth, context, value) => {
+                    // Plain values inside a list: the screenshots. The first the game can open of each list is kept.
+                    if (depth != 3)
+                        return;
+                    if (context == "MirroredScreenshots" && mirrored == null && CanOpen(value))
+                        mirrored = value;
+                    else if (context == "Screenshots" && original == null && CanOpen(value))
+                        original = value;
                 });
         }
     }
