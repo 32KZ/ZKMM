@@ -48,7 +48,19 @@ namespace ZKModMenu.Core {
         Keybind,
         Button,
         Favourite,
-        ResetAll
+        ResetAll,
+        /// <summary>A line of text the player can type, such as a hex colour. The row implements <see cref="IZkTextEdit"/>.</summary>
+        Text
+    }
+
+    /// <summary>A setting that holds text. Typed into right on the page.</summary>
+    public interface IZkTextEdit {
+        /// <summary>The value now.</summary>
+        string Text { get; }
+        int MinLength { get; }
+        int MaxLength { get; }
+        /// <summary>Store a new value. Returns false, with a short reason, when the value is not allowed.</summary>
+        bool TrySet(string value, out string error);
     }
 
     /// <summary>
@@ -108,6 +120,10 @@ namespace ZKModMenu.Core {
         string Author { get; }
         /// <summary>May be null when unknown.</summary>
         string Description { get; }
+        /// <summary>The mod's picture as a small square with rounded corners, or null when there is none (yet).</summary>
+        ZkImage Thumb { get; }
+        /// <summary>The mod's picture in 16:9 with rounded corners, or null when there is none (yet).</summary>
+        ZkImage Banner { get; }
         /// <summary>Number of settings the mod has. Worked out on first use.</summary>
         int SettingCount { get; }
         /// <summary>The rows of the mod page. Only valid between Open and Close.</summary>
@@ -136,6 +152,8 @@ namespace ZKModMenu.Core {
         bool ShowEmptyMods { get; set; }
         bool DetectDefaults { get; set; }
         bool OnlineInfo { get; set; }
+        /// <summary>Show each mod's picture from the mod database in the list and on its page.</summary>
+        bool ShowImages { get; set; }
         bool HideModOptionsButton { get; set; }
         /// <summary>Show menus that a mod opens from its page as ZKMM pages too.</summary>
         bool RestyleModScreens { get; set; }

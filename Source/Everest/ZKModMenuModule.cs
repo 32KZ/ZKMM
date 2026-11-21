@@ -17,7 +17,7 @@ namespace ZKModMenu {
         public override Type SettingsType => typeof(ZKModMenuSettings);
         public static ZKModMenuSettings Settings => (ZKModMenuSettings) Instance._Settings;
 
-        internal static string VersionText => Instance?.Metadata?.VersionString ?? "1.0.0";
+        internal static string VersionText => Instance?.Metadata?.VersionString ?? "1.1.0";
 
         private static string PauseLabel => Dialog.Clean("zkmodmenu_pause_button");
 

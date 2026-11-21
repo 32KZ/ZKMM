@@ -183,6 +183,7 @@ namespace ZKModMenu {
                 return;
             }
             menu.Update(dt);
+            ModImages.Trim();
 
             // A mod is showing a screen of its own. Wait for it, then ignore the press that closed it.
             if (menu.Suspended) {
@@ -561,6 +562,7 @@ namespace ZKModMenu {
 
         public void OptionsChanged() {
             ModInfoDatabase.Prepare(ZKModMenuModule.Settings.LookUpModInfoOnline);
+            ModImages.RetryFailed();
         }
     }
 }

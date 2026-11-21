@@ -163,6 +163,27 @@ namespace ZKModMenu {
             }
         }
 
+        public ZkImage Thumb {
+            get {
+                Pictures(out ZkImage thumb, out _);
+                return thumb;
+            }
+        }
+
+        public ZkImage Banner {
+            get {
+                Pictures(out _, out ZkImage banner);
+                return banner;
+            }
+        }
+
+        private void Pictures(out ZkImage thumb, out ZkImage banner) {
+            thumb = banner = null;
+            if (!options.ShowImages || id == "Everest")
+                return;
+            ModImages.Get(id, options.OnlineInfo, out thumb, out banner);
+        }
+
         public int SettingCount {
             get {
                 if (settingCount < 0)
@@ -305,7 +326,9 @@ namespace ZKModMenu {
 
             try {
                 // With the bindings shown right on the page, the buttons to Everest's key config screens are not needed.
-                ItemRows.Build(into, host.Items, defaults?.Items, 0, null, true, bindings.Count > 0 ? KeyConfigLabels() : null);
+                // Text settings (hex colours and the like) become rows the player can type into.
+                Func<TextMenu.Button, int, Func<bool>, ItemRow> textSettings = TextSettingRow.Finder(module, withDefaults);
+                ItemRows.Build(into, host.Items, defaults?.Items, 0, null, true, bindings.Count > 0 ? KeyConfigLabels() : null, textSettings);
             } catch (Exception e) {
                 Logger.Log(LogLevel.Warn, ZKModMenuModule.LogTag, "Could not read the settings of " + module.Metadata?.Name + ":");
                 Logger.LogDetailed(e, ZKModMenuModule.LogTag);

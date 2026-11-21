@@ -30,6 +30,27 @@ namespace ZKModMenu.Core {
             return new ZkColor(r, g, b, ToByte(alpha * 255f));
         }
 
+        /// <summary>
+        /// Read a colour written the way Celeste mods store them: "RRGGBB" or "RRGGBBAA", with or without a "#".
+        /// </summary>
+        public static bool TryParseHex(string text, out ZkColor color) {
+            color = Transparent;
+            if (string.IsNullOrEmpty(text))
+                return false;
+            string hex = text.Trim();
+            if (hex.StartsWith("#"))
+                hex = hex.Substring(1);
+            if (hex.Length != 6 && hex.Length != 8)
+                return false;
+            foreach (char c in hex) {
+                if (!Uri.IsHexDigit(c))
+                    return false;
+            }
+            byte Part(int at) => byte.Parse(hex.Substring(at, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+            color = new ZkColor(Part(0), Part(2), Part(4), hex.Length == 8 ? Part(6) : (byte) 255);
+            return true;
+        }
+
         /// <summary>Multiply the alpha.</summary>
         public ZkColor Fade(float alpha) => new ZkColor(R, G, B, ToByte(A * Clamp01(alpha)));
 

@@ -271,6 +271,257 @@ namespace ZKModMenu {
         public override string Label => ItemRows.OneLine(label() ?? "");
     }
 
+    /// <summary>
+    /// A text setting, such as a hex colour. Everest's Mod Options can only edit these from the title screen
+    /// (its button is greyed out in a level), so ZKMM lets the player type the new value right on the page.
+    /// The value is written to the mod's settings the same way Everest would.
+    /// </summary>
+    internal sealed class TextSettingRow : ItemRow, IZkTextEdit {
+        private readonly TextMenu.Button button;
+        private readonly PropertyInfo property;
+        private readonly object owner;
+        private readonly string name;
+        private readonly bool hasDefault;
+        private readonly string defaultValue;
+        private readonly int minLength, maxLength;
+        // Set when the setting holds a colour: its digit count, and how it is written (with "#", in lower case).
+        private readonly int colourDigits;
+        private readonly bool hash, lower;
+
+        public TextSettingRow(TextMenu.Button button, PropertyInfo property, object owner, string name,
+            int minLength, int maxLength, bool hasDefault, string defaultValue, int indent, Func<bool> shown)
+            : base(button, indent, shown) {
+            this.button = button;
+            this.property = property;
+            this.owner = owner;
+            this.name = name;
+            this.hasDefault = hasDefault;
+            this.defaultValue = defaultValue ?? "";
+            this.minLength = Math.Max(0, minLength);
+            this.maxLength = Math.Max(1, maxLength);
+
+            string sample = ZkColor.TryParseHex(Text, out _) ? Text : ZkColor.TryParseHex(this.defaultValue, out _) ? this.defaultValue : null;
+            if (sample != null) {
+                sample = sample.Trim();
+                hash = sample.StartsWith("#");
+                string digits = hash ? sample.Substring(1) : sample;
+                colourDigits = digits.Length;
+                lower = digits.ToLowerInvariant() == digits && digits.ToUpperInvariant() != digits;
+                AddDescription(colourDigits == 8
+                    ? "A colour, typed as 8 hex digits: red, green, blue and opacity (for example FF8800FF)."
+                    : "A colour, typed as 6 hex digits: red, green and blue (for example FF8800).");
+            }
+        }
+
+        public override ZkRowKind Kind => ZkRowKind.Text;
+        public override string Label => name;
+        // Everest greys these out in a level only because its text entry screen needs the title screen.
+        public override bool Disabled => false;
+        public override string ValueText => Text;
+        public override bool HasDefault => hasDefault;
+        public override bool Changed => hasDefault && Text != defaultValue;
+
+        public string Text {
+            get {
+                try {
+                    return property.GetValue(owner) as string ?? "";
+                } catch {
+                    return "";
+                }
+            }
+        }
+
+        public int MinLength => minLength;
+        public int MaxLength => colourDigits > 0 ? Math.Max(maxLength, colourDigits + 1) : maxLength;
+
+        // The text entry screen is the title screen's; nothing to press here.
+        public override void Left() {
+        }
+
+        public override void Right() {
+        }
+
+        public override void Confirm() {
+        }
+
+        public bool TrySet(string value, out string error) {
+            error = null;
+            value ??= "";
+            if (colourDigits > 0) {
+                string digits = value.Trim().TrimStart('#');
+                if (digits.Length != colourDigits || !ZkColor.TryParseHex(digits, out _)) {
+                    error = colourDigits == 8 ? "Type 8 hex digits, like FF8800FF" : "Type 6 hex digits, like FF8800";
+                    return false;
+                }
+                digits = lower ? digits.ToLowerInvariant() : digits.ToUpperInvariant();
+                value = (hash ? "#" : "") + digits;
+            } else if (value.Length > maxLength) {
+                error = "At most " + maxLength + " characters";
+                return false;
+            }
+            return Set(value);
+        }
+
+        private bool Set(string value) {
+            bool ok = false;
+            ItemRows.Guard(() => {
+                property.SetValue(owner, value);
+                ok = true;
+            });
+            if (ok)
+                button.Label = name + ": " + value;
+            return ok;
+        }
+
+        public override bool Reset() {
+            if (!Changed)
+                return false;
+            return Set(defaultValue);
+        }
+
+        // ---- finding them
+
+        private sealed class Candidate {
+            public PropertyInfo Property;
+            public object Owner;
+            public object FreshOwner;
+            public string Name;
+            public bool Used;
+        }
+
+        private static bool Wanted(PropertyInfo property) {
+            if (property.PropertyType != typeof(string) || !property.CanRead || !property.CanWrite)
+                return false;
+            if (property.GetIndexParameters().Length > 0)
+                return false;
+            if (property.GetCustomAttribute<SettingIgnoreAttribute>() != null)
+                return false;
+            // Made for the title screen only: the mod does not want it changed in a level.
+            SettingInGameAttribute inGame = property.GetCustomAttribute<SettingInGameAttribute>();
+            if (inGame != null && !inGame.InGame)
+                return false;
+            // Disabled in a level by the mod itself.
+            if (property.GetCustomAttribute<SettingInGameDisableAttribute>()?.InGame == true)
+                return false;
+            return true;
+        }
+
+        private static string NameOf(PropertyInfo property, string prefix) {
+            string key = property.GetCustomAttribute<SettingNameAttribute>()?.Name ?? prefix + property.Name.ToLowerInvariant();
+            return key.DialogCleanOrNull() ?? property.Name.SpacedPascalCase();
+        }
+
+        /// <summary>
+        /// Work out which of the buttons Everest made for <paramref name="module"/> stand for text settings, the same
+        /// way Everest names them ("Name: value"). Returns null when the module has none.
+        /// Call after the module filled its menu, so the values match the button labels.
+        /// </summary>
+        public static Func<TextMenu.Button, int, Func<bool>, ItemRow> Finder(EverestModule module, bool withDefaults) {
+            Type type;
+            object settings;
+            try {
+                type = module.SettingsType;
+                settings = module._Settings;
+            } catch {
+                return null;
+            }
+            if (type == null || settings == null)
+                return null;
+            SettingInGameAttribute typeInGame = type.GetCustomAttribute<SettingInGameAttribute>();
+            if (typeInGame != null && !typeInGame.InGame)
+                return null;
+
+            string typeName = type.Name.ToLowerInvariant();
+            if (typeName.EndsWith("settings"))
+                typeName = typeName.Substring(0, typeName.Length - 8);
+            string prefix = "modoptions_" + typeName + "_";
+
+            object fresh = null;
+            if (withDefaults) {
+                try {
+                    fresh = Activator.CreateInstance(type);
+                } catch {
+                    fresh = null;
+                }
+            }
+
+            List<Candidate> found = new List<Candidate>();
+            foreach (PropertyInfo property in type.GetProperties()) {
+                try {
+                    // A property with a hand-made entry is the mod's own business.
+                    if (type.GetMethod("Create" + property.Name + "Entry", BindingFlags.Public | BindingFlags.Instance, null,
+                            new[] { typeof(TextMenu), typeof(bool) }, null) != null)
+                        continue;
+
+                    if (Wanted(property)) {
+                        found.Add(new Candidate { Property = property, Owner = settings, FreshOwner = fresh, Name = NameOf(property, prefix) });
+                        continue;
+                    }
+
+                    // Settings grouped in a sub-menu.
+                    Type subType = property.PropertyType;
+                    if (subType.GetCustomAttribute<SettingSubMenuAttribute>() == null || !property.CanRead)
+                        continue;
+                    object sub = property.GetValue(settings);
+                    if (sub == null)
+                        continue;
+                    object freshSub = null;
+                    if (fresh != null) {
+                        try {
+                            freshSub = property.GetValue(fresh) ?? Activator.CreateInstance(subType);
+                        } catch {
+                            freshSub = null;
+                        }
+                    }
+                    foreach (PropertyInfo subProperty in subType.GetProperties()) {
+                        if (subType.GetMethod("Create" + subProperty.Name + "Entry", BindingFlags.Public | BindingFlags.Instance) != null)
+                            continue;
+                        if (Wanted(subProperty))
+                            found.Add(new Candidate { Property = subProperty, Owner = sub, FreshOwner = freshSub, Name = NameOf(subProperty, prefix) });
+                    }
+                } catch (Exception e) {
+                    Logger.Log(LogLevel.Verbose, ZKModMenuModule.LogTag, "Skipped a text setting of " + module.Metadata?.Name + ": " + e.Message);
+                }
+            }
+            if (found.Count == 0)
+                return null;
+
+            return (button, indent, shown) => {
+                string label = button.Label;
+                if (label == null)
+                    return null;
+                foreach (Candidate candidate in found) {
+                    if (candidate.Used)
+                        continue;
+                    string value;
+                    try {
+                        value = candidate.Property.GetValue(candidate.Owner) as string;
+                    } catch {
+                        continue;
+                    }
+                    if (label != candidate.Name + ": " + value)
+                        continue;
+                    candidate.Used = true;
+
+                    bool hasDefault = false;
+                    string defaultValue = null;
+                    if (candidate.FreshOwner != null) {
+                        try {
+                            defaultValue = candidate.Property.GetValue(candidate.FreshOwner) as string;
+                            hasDefault = true;
+                        } catch {
+                            hasDefault = false;
+                        }
+                    }
+                    int max = candidate.Property.GetCustomAttribute<SettingMaxLengthAttribute>()?.Max ?? 12;
+                    int min = candidate.Property.GetCustomAttribute<SettingMinLengthAttribute>()?.Min ?? 1;
+                    return new TextSettingRow(button, candidate.Property, candidate.Owner, candidate.Name, min, max, hasDefault, defaultValue, indent, shown);
+                }
+                return null;
+            };
+        }
+    }
+
     /// <summary>Turns the menu items a mod made for Everest's Mod Options into ZKMM rows.</summary>
     internal static class ItemRows {
 
@@ -297,8 +548,10 @@ namespace ZKModMenu {
         /// with default settings, or null when defaults are not known.
         /// </summary>
         /// <param name="skipLabels">Buttons with one of these labels are left out.</param>
+        /// <param name="special">Gets a say on each button first: a row of its own for it, or null for a plain button row.</param>
         public static void Build(List<ZkRow> rows, IList<TextMenu.Item> items, IList<TextMenu.Item> defaults,
-            int indent, Func<bool> shown, bool top, ICollection<string> skipLabels) {
+            int indent, Func<bool> shown, bool top, ICollection<string> skipLabels,
+            Func<TextMenu.Button, int, Func<bool>, ItemRow> special = null) {
 
             if (items == null)
                 return;
@@ -356,7 +609,7 @@ namespace ZKModMenu {
                     if (!string.IsNullOrWhiteSpace(subMenu.Label))
                         rows.Add(new ItemTextRow(ZkRowKind.Header, item, () => subMenu.Label, indent, shown));
                     Func<bool> childShown = () => subMenu.Visible && (shown == null || shown());
-                    Build(rows, subMenu.Items, (fromDefaults as TextMenuExt.SubMenu)?.Items, indent + 1, childShown, false, skipLabels);
+                    Build(rows, subMenu.Items, (fromDefaults as TextMenuExt.SubMenu)?.Items, indent + 1, childShown, false, skipLabels, special);
                     last = null;
                     continue;
                 }
@@ -373,7 +626,7 @@ namespace ZKModMenu {
                         IList<TextMenu.Item> childDefaults = defaultMenu?.Menus != null && defaultMenu.Menus.Count == optionMenu.Menus.Count
                             ? defaultMenu.Menus[m].Item2
                             : null;
-                        Build(rows, optionMenu.Menus[m].Item2, childDefaults, indent + 1, childShown, false, skipLabels);
+                        Build(rows, optionMenu.Menus[m].Item2, childDefaults, indent + 1, childShown, false, skipLabels, special);
                     }
                     last = row;
                     continue;
@@ -385,6 +638,13 @@ namespace ZKModMenu {
                 } else if (item is TextMenu.Button button) {
                     if (skipLabels != null && button.Label != null && skipLabels.Contains(button.Label))
                         continue;
+                    made = special?.Invoke(button, indent, shown);
+                    if (made != null) {
+                        // Knows its own default.
+                        rows.Add(made);
+                        last = made;
+                        continue;
+                    }
                     made = new ButtonRow(item, () => button.Label, indent, shown);
                 } else if (item is TextMenu.Setting || item is TextMenuExt.TextBox || item is TextMenuExt.Modal
                     || item is TextMenuExt.SearchToolTip || item is TextMenuExt.HeaderImage || !item.Selectable) {

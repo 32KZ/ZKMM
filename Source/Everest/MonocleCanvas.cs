@@ -91,6 +91,19 @@ namespace ZKModMenu {
             Draw.SpriteBatch.Draw(uploaded.Texture, target, source, Color.White);
         }
 
+        /// <summary>Free the texture made for one image, which is no longer going to be drawn.</summary>
+        public static void Forget(ZkImage image) {
+            if (image == null)
+                return;
+            if (image.Handle is Uploaded uploaded && uploaded.Texture != null) {
+                Textures.Remove(uploaded.Texture);
+                if (!uploaded.Texture.IsDisposed)
+                    uploaded.Texture.Dispose();
+            }
+            image.Handle = null;
+            Images.Remove(image);
+        }
+
         /// <summary>Free the textures made for images. They are made again when needed.</summary>
         public static void DisposeTextures() {
             foreach (Texture2D texture in Textures) {

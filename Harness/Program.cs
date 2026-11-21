@@ -110,8 +110,65 @@ namespace ZKModMenu.Harness {
         public override bool Reset() { if (!Changed) return false; Keys.Clear(); Keys.Add(Def); return true; }
     }
 
+    /// <summary>A setting holding text, like a mod's hex colour. Checks colours the way the game side does.</summary>
+    sealed class FakeText : ZkRow, IZkTextEdit {
+        public string L, Value, Def; public int Max = 12;
+        public override ZkRowKind Kind => ZkRowKind.Text;
+        public override string Label => L;
+        public override string Description => ZkColor.TryParseHex(Def, out _) ? "A colour, typed as 6 hex digits: red, green and blue (for example FF8800)." : null;
+        public override bool HasDefault => true;
+        public override bool Changed => Value != Def;
+        public string Text => Value;
+        public int MinLength => 1;
+        public int MaxLength => Max;
+        public bool TrySet(string v, out string error) {
+            error = null;
+            if (ZkColor.TryParseHex(Def, out _) && (v.TrimStart('#').Length != 6 || !ZkColor.TryParseHex(v, out _))) { error = "Type 6 hex digits, like FF8800"; return false; }
+            Value = ZkColor.TryParseHex(Def, out _) ? v.TrimStart('#').ToUpperInvariant() : v; return true;
+        }
+        public override bool Reset() { if (!Changed) return false; Value = Def; return true; }
+    }
+
+    /// <summary>Made-up "screenshots" so the picture code runs on something photo-like.</summary>
+    static class Pictures {
+        public static byte[] Scene(int seed, int w, int h) {
+            Random r = new Random(seed);
+            float hue = r.Next(360);
+            ZkColor sky1 = ZkColor.Hsl(hue, 0.6f, 0.65f), sky2 = ZkColor.Hsl(hue + 40, 0.5f, 0.3f);
+            ZkColor hill = ZkColor.Hsl(hue + 160, 0.45f, 0.3f), hill2 = ZkColor.Hsl(hue + 190, 0.5f, 0.18f);
+            float p1 = (float) r.NextDouble() * 6f, p2 = (float) r.NextDouble() * 6f;
+            float sunX = w * (0.2f + 0.6f * (float) r.NextDouble()), sunY = h * 0.3f;
+            byte[] px = new byte[w * h * 4];
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    ZkColor c = ZkColor.Lerp(sky1, sky2, y / (float) h);
+                    float dx = x - sunX, dy = y - sunY;
+                    if (dx * dx + dy * dy < h * h * 0.01f) c = ZkColor.Hsl(hue + 60, 0.9f, 0.85f);
+                    float ridge = h * (0.55f + 0.1f * (float) Math.Sin(x / (float) w * 7f + p1));
+                    float ridge2 = h * (0.72f + 0.07f * (float) Math.Sin(x / (float) w * 13f + p2));
+                    if (y > ridge) c = hill;
+                    if (y > ridge2) c = hill2;
+                    int i = (y * w + x) * 4;
+                    px[i] = c.R; px[i + 1] = c.G; px[i + 2] = c.B; px[i + 3] = 255;
+                }
+            return px;
+        }
+    }
+
     sealed class FakeMod : IZkMod {
         public string N, A, V, D; public List<ZkRow> R = new List<ZkRow>(); public bool Opened; public int Opens, Closes;
+        public ZkImage T, B;
+        public ZkImage Thumb => T;
+        public ZkImage Banner => B;
+        public void Picture(int seed) {
+            // The same steps as the game side: shrink once to 320x180, then make both shapes from that.
+            byte[] full = Pictures.Scene(seed, 1280, 720);
+            ZkImage small = ZkImage.Cover(full, 1280, 720, 320, 180, 0f);
+            byte[] rgba = new byte[small.Pixels.Length * 4];
+            for (int i = 0; i < small.Pixels.Length; i++) { ZkColor c = small.Pixels[i]; rgba[i * 4] = c.R; rgba[i * 4 + 1] = c.G; rgba[i * 4 + 2] = c.B; rgba[i * 4 + 3] = c.A; }
+            B = ZkImage.Cover(rgba, 320, 180, 320, 180, 0.23f);
+            T = ZkImage.Cover(rgba, 320, 180, 112, 112, 0.27f);
+        }
         public string Id => N.Replace(" ", "");
         public string Name => N;
         public string Version => V;
@@ -137,6 +194,7 @@ namespace ZKModMenu.Harness {
         public bool ShowEmptyMods { get; set; } = true;
         public bool DetectDefaults { get; set; } = true;
         public bool OnlineInfo { get; set; } = true;
+        public bool ShowImages { get; set; } = true;
         public bool HideModOptionsButton { get; set; }
         public bool RestyleModScreens { get; set; } = true;
         public HashSet<string> Favs = new HashSet<string>();
@@ -153,7 +211,7 @@ namespace ZKModMenu.Harness {
         public List<ZkRow> Extra = new List<ZkRow> { new FakeKey { L = "Other action button", Keys = { "X" }, Def = "X" } };
         public IReadOnlyList<IZkMod> Mods => ModList;
         public IZkOptions Options => Opt;
-        public string Version => "1.0.0";
+        public string Version => "1.1.0";
         public IReadOnlyList<ZkRow> ExtraSettingsRows => Extra;
         public void SaveOptions() => Saves++;
         public void Play(ZkSound sound) { }
@@ -172,6 +230,7 @@ namespace ZKModMenu.Harness {
         static ZkRow C(string l, string[] o, int d = 0) => new FakeRow { K = ZkRowKind.Choice, L = l, Opts = o, Value = d, Def = d };
         static ZkRow K(string l, string k) => new FakeKey { L = l, Keys = { k }, Def = k };
         static ZkRow B(string l) => new FakeRow { K = ZkRowKind.Button, L = l };
+        static ZkRow X(string l, string v) => new FakeText { L = l, Value = v, Def = v };
         static readonly string[] POS = { "Top left", "Top right", "Bottom left", "Bottom right" };
 
         static FakeMod M(string n, string a, string v, string d, params ZkRow[] rows) => new FakeMod { N = n, A = a, V = v, D = d, R = rows.ToList() };
@@ -183,7 +242,7 @@ namespace ZKModMenu.Harness {
             M("Bounce Pad Pack", "Tess Varga", "1.1.0", "Springy blocks and bounce pads for custom map makers.", T("Show hitboxes in editor", false), S("Bounce strength", 50, 200, 10, 100, "%")),
             M("Camera Tweaks", "Ollie Frost", "2.0.5", "Smooth, offset and zoom the camera however you like.", H("View"), S("Zoom", 50, 200, 10, 100, "%"), S("Smoothing", 0, 10, 1, 4), T("Look ahead when running", true, "Moves the camera a little in the direction you are running so you can see what is coming."), H("Controls"), K("Zoom in", "="), K("Zoom out", "-"), H("Effects"), C("Screen shake", new[] { "Off", "Low", "Normal", "High" }, 2)),
             M("Checkpoint Anywhere", "Rowan Ink", "1.2.3", "Drop a practice checkpoint wherever you are standing and jump back to it.", K("Place checkpoint", "Q"), K("Return to checkpoint", "E"), T("Clear when changing room"), S("Max checkpoints", 1, 9, 1, 3)),
-            M("Chroma Hair", "Juniper Lane", "4.1.0", "Pick your own hair colours for every dash count, with optional gradients.", C("0 dashes", new[] { "Default", "Red", "Pink", "Teal", "Gold", "White" }, 3), C("1 dash", new[] { "Default", "Red", "Pink", "Teal", "Gold", "White" }, 1), H("Gradient"), T("Animate gradient", false), S("Gradient speed", 1, 10, 1, 5)),
+            M("Chroma Hair", "Juniper Lane", "4.1.0", "Pick your own hair colours for every dash count, with optional gradients.", C("0 dashes", new[] { "Default", "Red", "Pink", "Teal", "Gold", "White" }, 3), C("1 dash", new[] { "Default", "Red", "Pink", "Teal", "Gold", "White" }, 1), H("Custom colours"), X("Hair colour", "AC3232"), X("Trail colour", "44B7FF"), X("Nickname", "Maddy"), H("Gradient"), T("Animate gradient", false), S("Gradient speed", 1, 10, 1, 5)),
             M("Collab Lobby Helper", "Mira Okafor", "1.6.2", "Quality of life for big collab lobbies: map lists, warp markers and progress at a glance.", T("Show completion %"), T("Show warp markers"), K("Open map list", "M"), C("Lobby music", new[] { "Default", "Quiet", "Off" })),
             M("Controller Glyphs", "Fenwick", "2.2.0", "Shows the correct button icons for whatever controller you are using.", C("Glyph style", new[] { "Auto", "Xbox", "PlayStation", "Switch", "Keyboard" }), T("Use glyphs in dialogue")),
             M("Crystal Heart Radar", "Sol & Sky", "1.0.4", "Gives a gentle ping when a crystal heart is somewhere in the current room.", T("Enabled"), C("Ping type", new[] { "Sound", "Visual", "Both" }, 2), S("Ping volume", 0, 100, 5, 60, "%")),
@@ -265,7 +324,60 @@ namespace ZKModMenu.Harness {
         static FakeHost NewHost() {
             FakeHost h = new FakeHost { ModList = Data.Mods() };
             h.Opt.Favs.Add("PracticeTimer"); h.Opt.Favs.Add("HitboxViewer"); h.Opt.Favs.Add("SavestatesLite");
+            // Most mods have a picture; a few do not, as in game.
+            for (int i = 0; i < h.ModList.Count; i++)
+                if (i % 5 != 4) ((FakeMod) h.ModList[i]).Picture(i * 7 + 3);
             return h;
+        }
+
+        // Text settings (hex colours) typed on the page, and the mods' pictures.
+        static void TextAndPictures() {
+            FakeHost h = NewHost(); ZkMenu m = new ZkMenu(h);
+            Times(m, ZkAction.Down, 4);
+            Shot(m, "40-list-pictures");
+
+            Do(m, ZkAction.Up, ZkAction.Up, ZkAction.Up, ZkAction.Up, ZkAction.Confirm);
+            foreach (char ch in "chroma") m.TypeChar(ch);
+            m.TypingKey(ZkTypingKey.Enter);
+            Do(m, ZkAction.Confirm);
+            FakeMod chroma = (FakeMod) h.ModList.First(x => x.Name == "Chroma Hair");
+            Check(chroma.Opened, "chroma hair opened");
+            FakeText hair = (FakeText) chroma.R.First(r => r.Label == "Hair colour");
+            Times(m, ZkAction.Down, 3);
+            Shot(m, "41-mod-page-hex");
+
+            Do(m, ZkAction.Confirm);
+            Check(m.Editing && m.Typing && h.TypingOn, "confirm on a text setting starts typing");
+            for (int i = 0; i < 6; i++) m.TypingKey(ZkTypingKey.Backspace);
+            foreach (char ch in "12") m.TypeChar(ch);
+            m.TypingKey(ZkTypingKey.Enter);
+            Check(m.Editing && hair.Value == "AC3232", "a bad colour is refused and typing goes on");
+            Shot(m, "42-hex-refused");
+            foreach (char ch in "34ab") m.TypeChar(ch);
+            Shot(m, "43-hex-typing");
+            m.TypingKey(ZkTypingKey.Enter);
+            Check(!m.Editing && !h.TypingOn && hair.Value == "1234AB", "a good colour is saved");
+            Shot(m, "44-hex-saved");
+            Do(m, ZkAction.Alt);
+            Check(hair.Value == "AC3232", "X resets a text setting");
+
+            // Escape leaves the value alone.
+            Do(m, ZkAction.Down, ZkAction.Down, ZkAction.Confirm);
+            FakeText nick = (FakeText) chroma.R.First(r => r.Label == "Nickname");
+            foreach (char ch in "Badeline") m.TypeChar(ch);
+            m.TypingKey(ZkTypingKey.Escape);
+            Check(!m.Editing && nick.Value == "Maddy", "escape cancels a text setting");
+            // The length limit holds.
+            Do(m, ZkAction.Confirm);
+            foreach (char ch in "abcdefghijklmnopqrstuvwxyz") m.TypeChar(ch);
+            m.TypingKey(ZkTypingKey.Enter);
+            Check(nick.Value.Length <= 12 && nick.Value.StartsWith("Maddy"), "text setting keeps to its length limit");
+
+            // Pictures off: letter badges come back.
+            Do(m, ZkAction.Back);
+            h.Opt.ShowImages = false;
+            foreach (IZkMod mod in h.ModList) { ((FakeMod) mod).T = null; ((FakeMod) mod).B = null; }
+            Shot(m, "45-list-no-pictures");
         }
 
         // A mod's own screen shown as a page: its rows replace the mod's, and Back belongs to the mod.
@@ -607,6 +719,7 @@ namespace ZKModMenu.Harness {
             h = NewHost(); h.Opt.ShowEmptyMods = false; m = new ZkMenu(h);
             Shot(m, "27-list-hide-empty");
 
+            TextAndPictures();
             SubPages();
             Screens();
 
